@@ -1,0 +1,22 @@
+Model,Type,Accuracy
+Logistic Regression,Simple,0.8524590163934426
+Naive Bayes,Simple,0.8688524590163934
+Support Vector Machine,Simple,0.8688524590163934
+K-Nearest Neighbors,Simple,0.9180327868852459
+Decision Tree,Simple,0.7540983606557377
+Random Forest,Simple,0.8360655737704918
+Neural Network,Simple,0.8688524590163934
+Logistic Regression,JOA Optimized,0.8524590163934426
+Naive Bayes,JOA Optimized,0.8688524590163934
+Support Vector Machine,JOA Optimized,0.8852459016393442
+K-Nearest Neighbors,JOA Optimized,0.8688524590163934
+Decision Tree,JOA Optimized,0.8524590163934426
+Random Forest,JOA Optimized,0.8688524590163934
+Neural Network,JOA Optimized,0.8688524590163934
+Logistic Regression,Fair (MI),0.8688524590163934
+Naive Bayes,Fair (MI),0.8524590163934426
+Support Vector Machine,Fair (MI),0.8852459016393442
+K-Nearest Neighbors,Fair (MI),0.8360655737704918
+Decision Tree,Fair (MI),0.819672131147541
+Random Forest,Fair (MI),0.8852459016393442
+Neural Network,Fair (MI),0.8688524590163934
