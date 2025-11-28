@@ -106,8 +106,14 @@ def precision_mir_ig_feature_selection(df, target_col='target', sensitive_col='s
     sensitive_col = sensitive_col.lower()
 
     # Get features
-    original_features = [f for f in df.columns if f not in [target_col, sensitive_col]]
-    engineered_features = [f for f in data.columns if f not in [target_col, sensitive_col] and f not in original_features]
+    # Fix: ensure case-insensitive exclusion
+    original_features = [f for f in df.columns if f.lower() not in [target_col, sensitive_col]]
+    engineered_features = [f for f in data.columns if f not in [target_col, sensitive_col] and f not in [o.lower() for o in original_features]]
+    
+    # Note: original_features has original casing, engineered_features has lowercase
+    # We need a unified list for encoding which expects a list of feature names
+    # optimized_feature_encoding handles lowercasing of feature names passed to it
+    
     all_features = original_features + engineered_features
 
     # Encoding
@@ -116,19 +122,24 @@ def precision_mir_ig_feature_selection(df, target_col='target', sensitive_col='s
     y = data_encoded[target_col].values
     A = data_encoded[sensitive_col].values
 
-    available_features = [f for f in all_features if f in data_encoded.columns]
-    X = data_encoded[available_features]
+    available_features = [f for f in all_features if f.lower() in data_encoded.columns]
+    # Note: available_features might have mixed casing, but data_encoded has lowercase columns
+    # We should use lowercase names for indexing data_encoded
+    
+    # Let's just use lowercase names for everything internally
+    available_features_lower = [f.lower() for f in available_features]
+    X = data_encoded[available_features_lower]
 
     # Calculate information measures
     IG, MI_A = {}, {}
 
-    for f in available_features:
+    for f in available_features_lower:
         IG[f] = optimized_mutual_information(X[f], y)
         MI_A[f] = optimized_mutual_information(X[f], A)
 
     # Feature selection with RF-optimized criteria
     selected, feature_scores = [], {}
-    remaining_features = available_features.copy()
+    remaining_features = available_features_lower.copy()
 
     # Feature importance based on your RF success
     rf_optimized_weights = {
@@ -208,7 +219,7 @@ def precision_evaluation(df, target_col='target', sensitive_col='sex'):
         for β in beta_values:
             for k in k_values:
                 try:
-                    print(f"Testing λ={λ}, β={β}, k={k}")
+                    print(f"Testing lambda={λ}, beta={β}, k={k}")
 
                     # Precision feature selection
                     selected_features, feature_scores = precision_mir_ig_feature_selection(
@@ -218,23 +229,23 @@ def precision_evaluation(df, target_col='target', sensitive_col='sex'):
                     if not selected_features:
                         continue
 
-                    # Use only original features
-                    original_features = [f for f in selected_features if f in df.columns]
+                    # Use only original features (checking against lowercase columns of df is tricky if df has mixed case)
+                    # selected_features are lowercase. df.columns might be mixed.
+                    # We want to map back to original features if possible, or just use selected features which are valid in 'data' context.
+                    # But here we want to evaluate on 'df' (or create a new dataframe with selected features).
+                    
+                    # Let's create the engineered dataframe again to select from
+                    data = create_targeted_features(df)
+                    data = optimized_feature_encoding(data, selected_features + [target_col.lower(), sensitive_col.lower()])
+                    
+                    # Now we have data with all needed columns (encoded)
+                    X = data[selected_features].copy()
+                    y = data[target_col.lower()]
 
-                    if len(original_features) < 4:
+                    if len(selected_features) < 4:
                         continue
 
-                    print(f"  Selected {len(original_features)} features: {original_features}")
-
-                    # Prepare data
-                    X = df[original_features].copy()
-                    y = df[target_col]
-
-                    # Simple encoding for RF
-                    for col in X.columns:
-                        if X[col].dtype == 'object':
-                            le = LabelEncoder()
-                            X[col] = le.fit_transform(X[col].astype(str))
+                    print(f"  Selected {len(selected_features)} features: {selected_features}")
 
                     # Use optimized RF
                     rf_model = get_optimized_random_forest()
@@ -262,8 +273,8 @@ def precision_evaluation(df, target_col='target', sensitive_col='sex'):
                         'cv_accuracy': cv_mean,
                         'cv_std': cv_std,
                         'test_accuracy': test_acc,
-                        'selected_features': original_features,
-                        'num_features': len(original_features),
+                        'selected_features': selected_features,
+                        'num_features': len(selected_features),
                         'feature_scores': feature_scores
                     })
 
@@ -276,6 +287,8 @@ def precision_evaluation(df, target_col='target', sensitive_col='sex'):
 
                 except Exception as e:
                     print(f"  Error: {e}")
+                    import traceback
+                    traceback.print_exc()
                     continue
 
     return pd.DataFrame(results)
@@ -284,146 +297,189 @@ def precision_evaluation(df, target_col='target', sensitive_col='sex'):
 # Main Execution
 # -------------------------------
 
-print("=== PRECISION FAIR FEATURE SELECTION ===")
-print("Using optimized Random Forest: n_estimators=56, max_depth=43, min_samples_split=13, min_samples_leaf=3")
-print(f"Dataset shape: {df.shape}")
+if __name__ == "__main__":
+    import os
+    
+    # Load data if running as main
+    try:
+        # Try different paths or use absolute path if known
+        if os.path.exists('data/heart.csv'):
+            df = pd.read_csv('data/heart.csv')
+        elif os.path.exists('../data/heart.csv'):
+            df = pd.read_csv('../data/heart.csv')
+        else:
+            # Fallback to absolute path from user info if needed, but relative is better for portability
+            # Assuming running from root of workspace
+            df = pd.read_csv('data/heart.csv')
+    except FileNotFoundError:
+        print("Error: data/heart.csv not found. Please ensure the data file exists.")
+        exit(1)
 
-# Run precision evaluation
-print("\nStarting precision evaluation...")
-precision_results = precision_evaluation(df)
+    print("=== PRECISION FAIR FEATURE SELECTION ===")
+    print("Using optimized Random Forest: n_estimators=56, max_depth=43, min_samples_split=13, min_samples_leaf=3")
+    print(f"Dataset shape: {df.shape}")
 
-if not precision_results.empty:
-    # Find best result
-    best_idx = precision_results['test_accuracy'].idxmax()
-    best_result = precision_results.loc[best_idx]
+    # Run precision evaluation
+    print("\nStarting precision evaluation...")
+    precision_results = precision_evaluation(df, target_col='target', sensitive_col='sex')
+    # Note: heart.csv usually has 'target' or 'HeartDisease'. We should check.
+    if 'target' not in df.columns.str.lower():
+        if 'heartdisease' in df.columns.str.lower():
+             # Find the actual column name
+             target_col = [c for c in df.columns if c.lower() == 'heartdisease'][0]
+             print(f"Using target column: {target_col}")
+             precision_results = precision_evaluation(df, target_col=target_col, sensitive_col='sex')
 
-    print(f"\n=== BEST FAIR CONFIGURATION ===")
-    print(f"λ = {best_result['lambda']:.2f}, β = {best_result['beta']:.2f}, k = {best_result['k']}")
-    print(f"10-fold CV accuracy: {best_result['cv_accuracy']:.4f} (±{best_result['cv_std']:.4f})")
-    print(f"Test accuracy: {best_result['test_accuracy']:.4f}")
-    print(f"Selected features: {best_result['selected_features']}")
+    if not precision_results.empty:
+        # Find best result
+        best_idx = precision_results['test_accuracy'].idxmax()
+        best_result = precision_results.loc[best_idx]
 
-    # Feature scores analysis
-    print(f"\nFeature Selection Scores:")
-    for feature, score in best_result['feature_scores'].items():
-        print(f"  {feature}: {score:.4f}")
+        print(f"\n=== BEST FAIR CONFIGURATION ===")
+        print(f"λ = {best_result['lambda']:.2f}, β = {best_result['beta']:.2f}, k = {best_result['k']}")
+        print(f"10-fold CV accuracy: {best_result['cv_accuracy']:.4f} (±{best_result['cv_std']:.4f})")
+        print(f"Test accuracy: {best_result['test_accuracy']:.4f}")
+        print(f"Selected features: {best_result['selected_features']}")
 
-    # Plot parameter sensitivity
-    plt.figure(figsize=(12, 5))
+        # Feature scores analysis
+        print(f"\nFeature Selection Scores:")
+        for feature, score in best_result['feature_scores'].items():
+            print(f"  {feature}: {score:.4f}")
 
-    plt.subplot(1, 2, 1)
-    for k in precision_results['k'].unique():
-        subset = precision_results[precision_results['k'] == k]
-        plt.plot(subset['lambda'], subset['test_accuracy'],
-                marker='o', linewidth=2, label=f'k={k}', markersize=6)
-    plt.axhline(y=0.90, color='red', linestyle='--', alpha=0.7, label='Target 90%')
-    plt.axhline(y=0.918, color='green', linestyle='--', alpha=0.7, label='Your Best 91.8%')
-    plt.title("Accuracy vs Fairness (λ)")
-    plt.xlabel("Fairness Regularization (λ)")
-    plt.ylabel("Test Accuracy")
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.7)
+        # Plot parameter sensitivity
+        plt.figure(figsize=(12, 5))
 
-    plt.subplot(1, 2, 2)
-    for λ in precision_results['lambda'].unique():
-        subset = precision_results[precision_results['lambda'] == λ]
-        plt.plot(subset['beta'], subset['test_accuracy'],
-                marker='s', linewidth=2, label=f'λ={λ}', markersize=6)
-    plt.axhline(y=0.90, color='red', linestyle='--', alpha=0.7, label='Target 90%')
-    plt.axhline(y=0.918, color='green', linestyle='--', alpha=0.7, label='Your Best 91.8%')
-    plt.title("Accuracy vs Redundancy Penalty (β)")
-    plt.xlabel("Redundancy Penalty (β)")
-    plt.ylabel("Test Accuracy")
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.7)
+        plt.subplot(1, 2, 1)
+        for k in precision_results['k'].unique():
+            subset = precision_results[precision_results['k'] == k]
+            plt.plot(subset['lambda'], subset['test_accuracy'],
+                    marker='o', linewidth=2, label=f'k={k}', markersize=6)
+        plt.axhline(y=0.90, color='red', linestyle='--', alpha=0.7, label='Target 90%')
+        plt.axhline(y=0.918, color='green', linestyle='--', alpha=0.7, label='Your Best 91.8%')
+        plt.title("Accuracy vs Fairness (λ)")
+        plt.xlabel("Fairness Regularization (λ)")
+        plt.ylabel("Test Accuracy")
+        plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.7)
 
-    plt.tight_layout()
-    plt.show()
+        plt.subplot(1, 2, 2)
+        for λ in precision_results['lambda'].unique():
+            subset = precision_results[precision_results['lambda'] == λ]
+            plt.plot(subset['beta'], subset['test_accuracy'],
+                    marker='s', linewidth=2, label=f'λ={λ}', markersize=6)
+        plt.axhline(y=0.90, color='red', linestyle='--', alpha=0.7, label='Target 90%')
+        plt.axhline(y=0.918, color='green', linestyle='--', alpha=0.7, label='Your Best 91.8%')
+        plt.title("Accuracy vs Redundancy Penalty (β)")
+        plt.xlabel("Redundancy Penalty (β)")
+        plt.ylabel("Test Accuracy")
+        plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.7)
 
-    # Final model with best fair configuration
-    print("\n=== FINAL FAIR MODEL ===")
-    final_features = best_result['selected_features']
+        plt.tight_layout()
+        plt.show()
 
-    X_final = df[final_features].copy()
-    y_final = df['target']
+        # Final model with best fair configuration
+        print("\n=== FINAL FAIR MODEL ===")
+        final_features = best_result['selected_features']
 
-    # Encode if needed
-    for col in X_final.columns:
-        if X_final[col].dtype == 'object':
+        # Re-create data for final model
+        data = create_targeted_features(df)
+        data = optimized_feature_encoding(data, final_features + ['target', 'sex']) # target/sex names might need adjustment
+        
+        # Adjust target/sex names for final model
+        target_col_name = 'target'
+        if 'target' not in df.columns.str.lower():
+             if 'heartdisease' in df.columns.str.lower():
+                 target_col_name = 'heartdisease'
+        
+        X_final = data[final_features].copy()
+        y_final = data[target_col_name]
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_final, y_final, test_size=0.2, random_state=42, stratify=y_final
+        )
+
+        final_model = get_optimized_random_forest()
+        final_model.fit(X_train, y_train)
+        y_pred = final_model.predict(X_test)
+        y_pred_proba = final_model.predict_proba(X_test)
+
+        print(f"Features: {final_features}")
+        print(f"Number of features: {len(final_features)}")
+        print(f"Fairness regularization: λ = {best_result['lambda']:.2f}")
+
+        print("\nClassification Report:")
+        print(classification_report(y_test, y_pred))
+
+        print(f"Accuracy: {accuracy_score(y_test, y_pred):.4f}")
+
+        # Feature importance
+        importance_df = pd.DataFrame({
+            'feature': final_features,
+            'importance': final_model.feature_importances_
+        }).sort_values('importance', ascending=False)
+
+        print("\nFeature Importance:")
+        print(importance_df)
+
+        # Plot feature importance
+        plt.figure(figsize=(10, 6))
+        plt.barh(importance_df['feature'], importance_df['importance'])
+        plt.title('Feature Importance in Fair Model')
+        plt.xlabel('Importance')
+        plt.tight_layout()
+        plt.show()
+
+        # Compare with your original best
+        print("\n=== COMPARISON WITH YOUR BEST RF ===")
+        print(f"Your Best RF Accuracy: 91.80%")
+        print(f"Fair Model Accuracy: {accuracy_score(y_test, y_pred):.4f}")
+        print(f"Accuracy Difference: {accuracy_score(y_test, y_pred) - 0.918:.4f}")
+
+        # Fairness analysis
+        sensitive_feature = 'sex'
+        if sensitive_feature in df.columns.str.lower():
+            # Need to get sensitive values corresponding to X_test
+            # X_test indices should match
+            # But we are using 'data' which is a copy.
+            # We can use train_test_split on the sensitive column too
+            _, _, _, sensitive_test = train_test_split(
+                X_final, data['sex'], test_size=0.2, random_state=42, stratify=y_final
+            )
+            
+            # Accuracy by sensitive group
+            for group in sorted(sensitive_test.unique()):
+                group_mask = (sensitive_test == group)
+                group_acc = accuracy_score(y_test[group_mask], y_pred[group_mask])
+                print(f"Accuracy for {sensitive_feature}={group}: {group_acc:.4f}")
+
+    # Baseline with all features (for comparison)
+    print("\n=== BASELINE: ALL FEATURES ===")
+    X_all = df.copy()
+    X_all.columns = X_all.columns.str.lower()
+    
+    target_col_name = 'target'
+    if 'target' not in X_all.columns:
+         if 'heartdisease' in X_all.columns:
+             target_col_name = 'heartdisease'
+             
+    y_all = X_all[target_col_name]
+    X_all = X_all.drop(target_col_name, axis=1)
+
+    # Encode categorical features
+    for col in X_all.columns:
+        if X_all[col].dtype == 'object':
             le = LabelEncoder()
-            X_final[col] = le.fit_transform(X_final[col].astype(str))
+            X_all[col] = le.fit_transform(X_all[col].astype(str))
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_final, y_final, test_size=0.2, random_state=42, stratify=y_final
+    X_train_all, X_test_all, y_train_all, y_test_all = train_test_split(
+        X_all, y_all, test_size=0.2, random_state=42, stratify=y_all
     )
 
-    final_model = get_optimized_random_forest()
-    final_model.fit(X_train, y_train)
-    y_pred = final_model.predict(X_test)
-    y_pred_proba = final_model.predict_proba(X_test)
+    baseline_model = get_optimized_random_forest()
+    baseline_model.fit(X_train_all, y_train_all)
+    y_pred_all = baseline_model.predict(X_test_all)
 
-    print(f"Features: {final_features}")
-    print(f"Number of features: {len(final_features)}")
-    print(f"Fairness regularization: λ = {best_result['lambda']:.2f}")
-
-    print("\nClassification Report:")
-    print(classification_report(y_test, y_pred))
-
-    print(f"Accuracy: {accuracy_score(y_test, y_pred):.4f}")
-
-    # Feature importance
-    importance_df = pd.DataFrame({
-        'feature': final_features,
-        'importance': final_model.feature_importances_
-    }).sort_values('importance', ascending=False)
-
-    print("\nFeature Importance:")
-    print(importance_df)
-
-    # Plot feature importance
-    plt.figure(figsize=(10, 6))
-    plt.barh(importance_df['feature'], importance_df['importance'])
-    plt.title('Feature Importance in Fair Model')
-    plt.xlabel('Importance')
-    plt.tight_layout()
-    plt.show()
-
-    # Compare with your original best
-    print("\n=== COMPARISON WITH YOUR BEST RF ===")
-    print(f"Your Best RF Accuracy: 91.80%")
-    print(f"Fair Model Accuracy: {accuracy_score(y_test, y_pred):.4f}")
-    print(f"Accuracy Difference: {accuracy_score(y_test, y_pred) - 0.918:.4f}")
-
-    # Fairness analysis
-    sensitive_feature = 'sex'
-    if sensitive_feature in df.columns:
-        X_test_with_sensitive = df.loc[X_test.index].copy()
-        sensitive_values = X_test_with_sensitive[sensitive_feature]
-
-        # Accuracy by sensitive group
-        for group in sorted(sensitive_values.unique()):
-            group_mask = (sensitive_values == group)
-            group_acc = accuracy_score(y_test[group_mask], y_pred[group_mask])
-            print(f"Accuracy for {sensitive_feature}={group}: {group_acc:.4f}")
-
-# Baseline with all features (for comparison)
-print("\n=== BASELINE: ALL FEATURES ===")
-X_all = df.drop('target', axis=1).copy()
-y_all = df['target']
-
-# Encode categorical features
-for col in X_all.columns:
-    if X_all[col].dtype == 'object':
-        le = LabelEncoder()
-        X_all[col] = le.fit_transform(X_all[col].astype(str))
-
-X_train_all, X_test_all, y_train_all, y_test_all = train_test_split(
-    X_all, y_all, test_size=0.2, random_state=42, stratify=y_all
-)
-
-baseline_model = get_optimized_random_forest()
-baseline_model.fit(X_train_all, y_train_all)
-y_pred_all = baseline_model.predict(X_test_all)
-
-print(f"Baseline (all features) Accuracy: {accuracy_score(y_test_all, y_pred_all):.4f}")
-print(f"Feature selection improvement: {best_result['test_accuracy'] - accuracy_score(y_test_all, y_pred_all):.4f}")
+    print(f"Baseline (all features) Accuracy: {accuracy_score(y_test_all, y_pred_all):.4f}")
+    if not precision_results.empty:
+        print(f"Feature selection improvement: {best_result['test_accuracy'] - accuracy_score(y_test_all, y_pred_all):.4f}")
