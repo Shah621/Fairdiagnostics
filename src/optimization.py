@@ -3,8 +3,6 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.naive_bayes import GaussianNB
 from sklearn.svm import SVC
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.tree import DecisionTreeClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
@@ -72,26 +70,10 @@ def get_model_config(model_name):
     elif model_name == "Support Vector Machine":
         return {
             "class": SVC,
-            "params": ["C"],
-            "bounds": [(0.1, 50.0)],
-            "types": [float],
-            "fixed_params": {"kernel": "linear", "probability": True}
-        }
-    elif model_name == "K-Nearest Neighbors":
-        return {
-            "class": KNeighborsClassifier,
-            "params": ["n_neighbors"],
-            "bounds": [(1, 30)],
-            "types": [int],
-            "fixed_params": {}
-        }
-    elif model_name == "Decision Tree":
-        return {
-            "class": DecisionTreeClassifier,
-            "params": ["max_depth", "min_samples_split"],
-            "bounds": [(2, 50), (2, 20)],
-            "types": [int, int],
-            "fixed_params": {"random_state": 42}
+            "params": ["C", "gamma"],
+            "bounds": [(0.1, 100.0), (0.001, 1.0)],
+            "types": [float, float],
+            "fixed_params": {"kernel": "rbf", "probability": True}
         }
     elif model_name == "Random Forest":
         return {
